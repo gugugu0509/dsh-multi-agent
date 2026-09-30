@@ -89,7 +89,10 @@ function markInFile(b, line) {
 function ack(b) {
   const quote = b.body.join(' ').replace(/\s+/g, ' ').replace(/["\\]/g, '').trim().slice(0, 40);
   const text = `收到：「${quote}」（WBY 自动接轮 ${nowTs()}）已捕获进队列，深度处理稍后完成。`;
-  const cmd = `"${LARK_CLI}" im +messages-send --as bot --chat-id ${b.chat || DEFAULT_CHAT} --text "${text}"`;
+  // 硬化：b.chat 来自收件箱（即房间内容），必须校验成飞书 chat_id 形态后才允许拼接；
+  // 文本去掉 % 以阻断 cmd 的 %VAR% 展开（否则房间里的 %FA_SECRET% 会展开成密钥发进群）。
+  const chatId = /^oc_[A-Za-z0-9_-]{6,64}$/.test(String(b.chat || "")) ? b.chat : DEFAULT_CHAT;
+  const cmd = `"${LARK_CLI}" im +messages-send --as bot --chat-id "${chatId}" --text "${text.replace(/%/g, "％")}"`;
   try {
     const r = spawnSync(cmd, { encoding: 'utf8', shell: true, timeout: 60000 });
     const out = ((r.stdout || '') + (r.stderr || '')).trim();

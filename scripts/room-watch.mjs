@@ -54,10 +54,23 @@ async function appendReply(text) {
   log("appended @dsh reply (len " + text.length + ")");
 }
 
+// 任务文本最终要作为 cmd.exe 的一个「引号参数」传进去，因此拼接前必须中和三类字符：
+//   ① 换行/回车 —— 会提前截断命令行，其后的文本会被 cmd 当成**新命令**执行（命令注入）
+//   ② 双引号   —— 会提前闭合引号，使后面的字符变成命令的一部分
+//   ③ 百分号   —— cmd 即使在引号内也会展开 %VAR%，房间里写 %FA_SECRET% 就能把环境变量
+//                 的内容带进 agent 的提示词（信息泄露）。统一换成全角，保持可读。
+function sanitizeTaskArg(s) {
+  return String(s)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/"/g, "“")
+    .replace(/%/g, "％")
+    .slice(0, 8000);
+}
+
 function spawnHeadless(taskText) {
   return new Promise((resolve) => {
     rm(TMP, { force: true }).catch(() => {});
-    const safeTask = taskText.replace(/"/g, "“");
+    const safeTask = sanitizeTaskArg(taskText);
     const cmd = `dsh --profile headless "${safeTask}"`;
     const child = spawn("cmd.exe", ["/c", cmd], { cwd: PROJECT, stdio: "ignore", env: process.env, windowsHide: true });
     const timer = setTimeout(() => { try { child.kill(); } catch {} log("headless timeout, killed"); }, HEADLESS_TIMEOUT_MS);

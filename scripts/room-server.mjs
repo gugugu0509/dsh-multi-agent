@@ -5,7 +5,18 @@ import { createServer } from "node:http";
 import { ROOM } from './paths.mjs';
 
 const FILE = ROOM + "/transcript.md";
-const PORT = 18090;
+// ── 绑定与端口 ─────────────────────────────────────────────────────────
+// 默认只监听回环地址，端口可用 ROOM_PORT 改。
+// ⚠️ 这个看板**没有任何认证**：它能读/写 room/transcript.md，而房间内容会触发 agent。
+//    因此绑到非回环地址必须显式放行（ROOM_ALLOW_REMOTE=1），否则自动退回 127.0.0.1。
+const PORT = Number(process.env.ROOM_PORT || 18090);
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1"]);
+const WANT_HOST = process.env.ROOM_HOST || "127.0.0.1";
+const HOST = LOOPBACK.has(WANT_HOST) || process.env.ROOM_ALLOW_REMOTE === "1" ? WANT_HOST : "127.0.0.1";
+if (HOST !== WANT_HOST) {
+  console.warn("[room-server] 拒绝绑定 " + WANT_HOST + "：看板无认证且会触发 agent，已退回 127.0.0.1。"
+    + "确实需要外露请设 ROOM_ALLOW_REMOTE=1，并自行加反向代理鉴权。");
+}
 
 function now() { const d = new Date(); const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
@@ -71,15 +82,42 @@ function appendEntry(body) {
   return appendFile(FILE, block, "utf8").then(() => `ok @${safe}`);
 }
 
+// 同源校验：任何网页都能向 127.0.0.1 发「简单请求」（表单 POST 不需要 CORS 预检），
+// 不加这层的话，用户在浏览器里打开一个恶意页面就可能把内容注入房间、进而触发 agent。
+// 跨站请求一定带 Origin，本机脚本（curl / node）不带——只拦前者。
+function isLocalOrigin(req) {
+  const o = req.headers.origin;
+  if (!o) return true;
+  try {
+    const u = new URL(o);
+    return LOOPBACK.has(u.hostname) && u.port === String(PORT);
+  } catch { return false; }
+}
+
+const MAX_BODY = 64 * 1024;   // 单条消息上限，避免无界内存
+
 createServer(async (req, res) => {
   try {
     if (req.method === "POST" && req.url === "/speak") {
+      if (!isLocalOrigin(req)) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+        res.end("forbidden: cross-origin"); return;
+      }
       let body = "";
-      for await (const ch of req) body += ch;
+      for await (const ch of req) {
+        body += ch;
+        if (body.length > MAX_BODY) { res.writeHead(413); res.end("too large"); return; }
+      }
       const msg = await appendEntry(body);
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end(msg); return;
     }
-    if (req.url === "/raw") { const b = await readFile(FILE, "utf8"); res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end(b); return; }
+    if (req.url === "/raw") {
+      // 文件还不存在（房间还没人发言）时返回空内容，而不是 500
+      let b = "";
+      try { b = await readFile(FILE, "utf8"); } catch { b = ""; }
+      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end(b); return;
+    }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(PAGE);
   } catch (e) { res.writeHead(500); res.end(String(e)); }
-}).listen(PORT, "127.0.0.1", () => console.log("room board: http://127.0.0.1:" + PORT));
+}).listen(PORT, HOST, () => console.log("room board: http://" + HOST + ":" + PORT
+  + (LOOPBACK.has(HOST) ? "" : "   ⚠ 已绑定非回环地址，且无认证")));

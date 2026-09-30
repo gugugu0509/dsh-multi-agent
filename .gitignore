@@ -1,0 +1,20 @@
+# 运行状态与日志（不入库）
+room/
+*.log
+*.tmp
+.codebuddy-out.txt
+
+# 凭据与私有信息（不入库）
+飞书Agent协作应用信息.docx
+飞书Agent协作应用信息.txt
+.env
+secrets.*
+
+# 依赖与系统
+node_modules/
+.DS_Store
+Thumbs.db
+
+# 本机飞书标识（真实值，不入库）
+scripts/.env.local.cmd
+scripts/.env.local.ps1
